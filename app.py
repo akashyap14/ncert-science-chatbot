@@ -5,7 +5,7 @@ from rag_backend import (
     PDF_DIR,
     load_pdfs_from_dir,
     chunk_documents,
-    build_or_load_vectorstore,
+    build_vectorstore,
     build_llm,
     build_rag_chain,
     ask_with_memory,
@@ -54,7 +54,7 @@ if "rag_chain" not in st.session_state:
     with st.spinner("Loading NCERT textbooks..."):
         docs = load_pdfs_from_dir(PDF_DIR)
         chunks = chunk_documents(docs)
-        vectorstore = build_or_load_vectorstore(chunks)
+        vectorstore = build_vectorstore(chunks)
         llm = build_llm()
         st.session_state.rag_chain = build_rag_chain(vectorstore, llm)
 

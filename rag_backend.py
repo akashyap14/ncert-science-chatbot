@@ -1,6 +1,5 @@
 from pathlib import Path
 from typing import List, Dict
-import pickle
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -19,25 +18,20 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 # -----------------------------
 BASE_DIR = Path("data")
 PDF_DIR = BASE_DIR / "pdfs"
-VECTORSTORE_PATH = Path("data/vectorstore")
-VECTORSTORE_PATH.mkdir(parents=True, exist_ok=True)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-4o-mini"
 
 
 # -----------------------------
-# Load PDFs from local path
+# Load PDFs (local only)
 # -----------------------------
 def load_pdfs_from_dir(pdf_dir: Path) -> List[Document]:
     docs = []
 
     pdf_files = list(pdf_dir.glob("*.pdf"))
     if not pdf_files:
-        raise RuntimeError(
-            "No PDFs found in data/pdfs/. "
-            "Please add NCERT Class 9 & 10 Science PDFs."
-        )
+        raise RuntimeError("No PDFs found in data/pdfs/")
 
     for pdf in pdf_files:
         loader = PyPDFLoader(str(pdf))
@@ -45,16 +39,13 @@ def load_pdfs_from_dir(pdf_dir: Path) -> List[Document]:
 
         for page in pages:
             text = page.page_content.strip()
-
-            # Skip empty / index pages
             if len(text) < 200:
                 continue
 
-            # Add source info
             page.metadata["source"] = pdf.name
             docs.append(page)
 
-    print(f"Loaded {len(docs)} meaningful pages")
+    print(f"Loaded {len(docs)} pages")
     return docs
 
 
@@ -78,47 +69,19 @@ def chunk_documents(
 
 
 # -----------------------------
-# Vector Store (SAFE BATCHING)
+# InMemory VectorStore (BATCHED)
 # -----------------------------
-# def build_vectorstore(chunks: List[Document]) -> InMemoryVectorStore:
-#     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
-#     vectorstore = InMemoryVectorStore(embedding=embeddings)
-
-#     BATCH_SIZE = 50
-
-#     for i in range(0, len(chunks), BATCH_SIZE):
-#         batch = chunks[i : i + BATCH_SIZE]
-#         vectorstore.add_documents(batch)
-#         print(f"Embedded {i + len(batch)} / {len(chunks)}")
-
-#     return vectorstore
-
-
-def build_or_load_vectorstore(chunks: List[Document]) -> InMemoryVectorStore:
-    cache_file = VECTORSTORE_PATH / "vectorstore.pkl"
-
+def build_vectorstore(chunks: List[Document]) -> InMemoryVectorStore:
     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
-
-    # 🔹 Load if exists
-    if cache_file.exists():
-        print("Loading cached vectorstore from disk...")
-        with open(cache_file, "rb") as f:
-            return pickle.load(f)
-
-    # 🔹 Build once
-    print("Building vectorstore (first time only)...")
     vectorstore = InMemoryVectorStore(embedding=embeddings)
 
-    BATCH_SIZE = 50
+    BATCH_SIZE = 40  # SAFE for OpenAI
+
     for i in range(0, len(chunks), BATCH_SIZE):
-        vectorstore.add_documents(chunks[i:i+BATCH_SIZE])
-        print(f"Embedded {i + BATCH_SIZE} / {len(chunks)}")
+        batch = chunks[i : i + BATCH_SIZE]
+        vectorstore.add_documents(batch)
+        print(f"Embedded {min(i + BATCH_SIZE, len(chunks))}/{len(chunks)}")
 
-    # 🔹 Save to disk
-    with open(cache_file, "wb") as f:
-        pickle.dump(vectorstore, f)
-
-    print("Vectorstore cached successfully.")
     return vectorstore
 
 
@@ -136,15 +99,14 @@ def build_llm() -> ChatOpenAI:
 def build_rag_chain(vectorstore: InMemoryVectorStore, llm: ChatOpenAI):
 
     retriever = vectorstore.as_retriever(
-        search_type="similarity",
         search_kwargs={"k": 4},
     )
 
     def format_docs(docs: List[Document]) -> str:
         return "\n\n".join(
-            f"[{doc.metadata.get('source')} | Page {doc.metadata.get('page', 'N/A')}]\n"
-            f"{doc.page_content}"
-            for doc in docs
+            f"[{d.metadata.get('source')} | Page {d.metadata.get('page', 'N/A')}]\n"
+            f"{d.page_content}"
+            for d in docs
         )
 
     prompt = ChatPromptTemplate.from_messages(
@@ -154,10 +116,9 @@ def build_rag_chain(vectorstore: InMemoryVectorStore, llm: ChatOpenAI):
                 "You are an NCERT Science assistant for Indian school students "
                 "(Class 9 and Class 10).\n\n"
                 "Rules:\n"
-                "- Answer ONLY from the provided NCERT textbook content.\n"
-                "- Explain concepts in simple, exam-oriented language.\n"
-                "- If the answer is not found in NCERT, say clearly:\n"
-                "  'This topic is not covered in the NCERT textbook.'\n\n"
+                "- Answer ONLY from the NCERT textbook content.\n"
+                "- Explain in simple, exam-oriented language.\n"
+                "- If the answer is not found, say it is not covered in NCERT.\n\n"
                 "NCERT Content:\n{context}",
             ),
             ("human", "{question}"),
@@ -186,16 +147,14 @@ def ask_with_memory(
 ) -> str:
 
     if history:
-        recent = history[-max_turns:]
         convo = "\n".join(
-            f"User: {t['user']}\nAssistant: {t['bot']}"
-            for t in recent
+            f"User: {h['user']}\nAssistant: {h['bot']}"
+            for h in history[-max_turns:]
         )
-        question = f"Previous conversation:\n{convo}\n\nQuestion:\n{question}"
+        question = f"{convo}\n\nQuestion: {question}"
 
     answer = rag_chain.invoke(question)
 
     history.append({"user": question, "bot": answer})
     history[:] = history[-max_turns:]
-
     return answer
