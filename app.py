@@ -42,18 +42,27 @@ st.sidebar.info(
 if "history" not in st.session_state:
     st.session_state.history = []
 
+from rag_backend import FAISS_DIR
+
 if "rag_chain" not in st.session_state:
 
-    if "OPENAI_API_KEY" not in os.environ:
-        st.error("OPENAI_API_KEY not set")
-        st.stop()
-
-    with st.spinner("Preparing NCERT knowledge base..."):
-        docs = load_pdfs_from_dir(PDF_DIR)
-        chunks = chunk_documents(docs)
-        vectorstore = build_or_load_vectorstore(chunks)
+    if FAISS_DIR.exists():
+        # Fast path: FAISS already built
+        docs = None  # not needed
+        chunks = None
+        vectorstore = build_or_load_vectorstore([])
         llm = build_llm()
         st.session_state.rag_chain = build_rag_chain(vectorstore, llm)
+
+    else:
+        # Slow path: first-time build
+        with st.spinner("Setting up NCERT knowledge base (one-time process)..."):
+            docs = load_pdfs_from_dir(PDF_DIR)
+            chunks = chunk_documents(docs)
+            vectorstore = build_or_load_vectorstore(chunks)
+            llm = build_llm()
+            st.session_state.rag_chain = build_rag_chain(vectorstore, llm)
+
 
 # -------------------------------------------------
 # Chat History
