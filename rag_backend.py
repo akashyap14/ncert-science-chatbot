@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Dict
+import pickle
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -18,6 +19,8 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 # -----------------------------
 BASE_DIR = Path("data")
 PDF_DIR = BASE_DIR / "pdfs"
+VECTORSTORE_PATH = Path("data/vectorstore")
+VECTORSTORE_PATH.mkdir(parents=True, exist_ok=True)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-4o-mini"
@@ -77,17 +80,45 @@ def chunk_documents(
 # -----------------------------
 # Vector Store (SAFE BATCHING)
 # -----------------------------
-def build_vectorstore(chunks: List[Document]) -> InMemoryVectorStore:
+# def build_vectorstore(chunks: List[Document]) -> InMemoryVectorStore:
+#     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
+#     vectorstore = InMemoryVectorStore(embedding=embeddings)
+
+#     BATCH_SIZE = 50
+
+#     for i in range(0, len(chunks), BATCH_SIZE):
+#         batch = chunks[i : i + BATCH_SIZE]
+#         vectorstore.add_documents(batch)
+#         print(f"Embedded {i + len(batch)} / {len(chunks)}")
+
+#     return vectorstore
+
+
+def build_or_load_vectorstore(chunks: List[Document]) -> InMemoryVectorStore:
+    cache_file = VECTORSTORE_PATH / "vectorstore.pkl"
+
     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
+
+    # 🔹 Load if exists
+    if cache_file.exists():
+        print("Loading cached vectorstore from disk...")
+        with open(cache_file, "rb") as f:
+            return pickle.load(f)
+
+    # 🔹 Build once
+    print("Building vectorstore (first time only)...")
     vectorstore = InMemoryVectorStore(embedding=embeddings)
 
     BATCH_SIZE = 50
-
     for i in range(0, len(chunks), BATCH_SIZE):
-        batch = chunks[i : i + BATCH_SIZE]
-        vectorstore.add_documents(batch)
-        print(f"Embedded {i + len(batch)} / {len(chunks)}")
+        vectorstore.add_documents(chunks[i:i+BATCH_SIZE])
+        print(f"Embedded {i + BATCH_SIZE} / {len(chunks)}")
 
+    # 🔹 Save to disk
+    with open(cache_file, "wb") as f:
+        pickle.dump(vectorstore, f)
+
+    print("Vectorstore cached successfully.")
     return vectorstore
 
 
