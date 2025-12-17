@@ -73,18 +73,19 @@ def chunk_documents(
 # FAISS Vector Store (BATCHED + CACHED)
 # -------------------------------------------------
 def build_or_load_vectorstore(chunks: List[Document]) -> FAISS:
-    embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
+    
 
     # 🔹 Load cached index if exists
     if FAISS_DIR.exists():
         print("Loading FAISS index from disk...")
         return FAISS.load_local(
             FAISS_DIR,
-            embeddings,
+            OpenAIEmbeddings(model=EMBEDDING_MODEL),
             allow_dangerous_deserialization=True,
         )
 
     print("Building FAISS index with batching (first run)...")
+    embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
 
     BATCH_SIZE = 40  # safe for OpenAI limits
 
