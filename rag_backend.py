@@ -123,7 +123,7 @@ def build_llm() -> ChatOpenAI:
 def build_rag_chain(vectorstore: FAISS, llm: ChatOpenAI):
 
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 3},
+        search_kwargs={"k": 8},
     )
 
     def format_docs(docs: List[Document]) -> str:
@@ -141,6 +141,8 @@ def build_rag_chain(vectorstore: FAISS, llm: ChatOpenAI):
                 "(Class 9 and Class 10).\n\n"
                 "Rules:\n"
                 "- Answer ONLY from the NCERT textbook content.\n"
+                "- User may ask question in Hindi or English; respond in the same language.\n"
+                "- User can ask vague or broad questions; use the context to provide specific answers.\n"
                 "- Explain in simple, exam-oriented language.\n"
                 "- If the answer is not found, say:\n"
                 "  'This topic is not covered in the NCERT textbook.'\n\n"
