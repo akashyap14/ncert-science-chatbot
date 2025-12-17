@@ -3,29 +3,30 @@ from typing import List, Dict
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
 
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
-from langchain_core.vectorstores import InMemoryVectorStore
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 
-# -----------------------------
-# Paths
-# -----------------------------
+# -------------------------------------------------
+# Paths & Models
+# -------------------------------------------------
 BASE_DIR = Path("data")
 PDF_DIR = BASE_DIR / "pdfs"
+FAISS_DIR = BASE_DIR / "faiss_index"
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-4o-mini"
 
 
-# -----------------------------
-# Load PDFs (local only)
-# -----------------------------
+# -------------------------------------------------
+# Load PDFs (LOCAL ONLY)
+# -------------------------------------------------
 def load_pdfs_from_dir(pdf_dir: Path) -> List[Document]:
     docs = []
 
@@ -45,16 +46,16 @@ def load_pdfs_from_dir(pdf_dir: Path) -> List[Document]:
             page.metadata["source"] = pdf.name
             docs.append(page)
 
-    print(f"Loaded {len(docs)} pages")
+    print(f"Loaded {len(docs)} meaningful pages")
     return docs
 
 
-# -----------------------------
+# -------------------------------------------------
 # Chunking
-# -----------------------------
+# -------------------------------------------------
 def chunk_documents(
     docs: List[Document],
-    chunk_size: int = 700,
+    chunk_size: int = 800,
     chunk_overlap: int = 100,
 ) -> List[Document]:
 
@@ -68,26 +69,48 @@ def chunk_documents(
     return chunks
 
 
-# -----------------------------
-# InMemory VectorStore (BATCHED)
-# -----------------------------
-def build_vectorstore(chunks: List[Document]) -> InMemoryVectorStore:
+# -------------------------------------------------
+# FAISS Vector Store (BATCHED + CACHED)
+# -------------------------------------------------
+def build_or_load_vectorstore(chunks: List[Document]) -> FAISS:
     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
-    vectorstore = InMemoryVectorStore(embedding=embeddings)
 
-    BATCH_SIZE = 40  # SAFE for OpenAI
+    # 🔹 Load cached index if exists
+    if FAISS_DIR.exists():
+        print("Loading FAISS index from disk...")
+        return FAISS.load_local(
+            FAISS_DIR,
+            embeddings,
+            allow_dangerous_deserialization=True,
+        )
 
-    for i in range(0, len(chunks), BATCH_SIZE):
+    print("Building FAISS index with batching (first run)...")
+
+    BATCH_SIZE = 40  # safe for OpenAI limits
+
+    # 🔹 Initialize FAISS with FIRST batch (CRITICAL)
+    first_batch = chunks[:BATCH_SIZE]
+    vectorstore = FAISS.from_documents(first_batch, embeddings)
+
+    print(f"Embedded {len(first_batch)}/{len(chunks)}")
+
+    # 🔹 Add remaining batches
+    for i in range(BATCH_SIZE, len(chunks), BATCH_SIZE):
         batch = chunks[i : i + BATCH_SIZE]
         vectorstore.add_documents(batch)
         print(f"Embedded {min(i + BATCH_SIZE, len(chunks))}/{len(chunks)}")
 
+    # 🔹 Save index
+    vectorstore.save_local(FAISS_DIR)
+    print("FAISS index saved to disk")
+
     return vectorstore
 
 
-# -----------------------------
+
+# -------------------------------------------------
 # LLM + RAG Chain
-# -----------------------------
+# -------------------------------------------------
 def build_llm() -> ChatOpenAI:
     return ChatOpenAI(
         model=CHAT_MODEL,
@@ -96,10 +119,10 @@ def build_llm() -> ChatOpenAI:
     )
 
 
-def build_rag_chain(vectorstore: InMemoryVectorStore, llm: ChatOpenAI):
+def build_rag_chain(vectorstore: FAISS, llm: ChatOpenAI):
 
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 4},
+        search_kwargs={"k": 3},
     )
 
     def format_docs(docs: List[Document]) -> str:
@@ -118,7 +141,8 @@ def build_rag_chain(vectorstore: InMemoryVectorStore, llm: ChatOpenAI):
                 "Rules:\n"
                 "- Answer ONLY from the NCERT textbook content.\n"
                 "- Explain in simple, exam-oriented language.\n"
-                "- If the answer is not found, say it is not covered in NCERT.\n\n"
+                "- If the answer is not found, say:\n"
+                "  'This topic is not covered in the NCERT textbook.'\n\n"
                 "NCERT Content:\n{context}",
             ),
             ("human", "{question}"),
@@ -136,9 +160,9 @@ def build_rag_chain(vectorstore: InMemoryVectorStore, llm: ChatOpenAI):
     )
 
 
-# -----------------------------
+# -------------------------------------------------
 # Conversational Memory
-# -----------------------------
+# -------------------------------------------------
 def ask_with_memory(
     rag_chain,
     question: str,
@@ -157,4 +181,5 @@ def ask_with_memory(
 
     history.append({"user": question, "bot": answer})
     history[:] = history[-max_turns:]
+
     return answer
